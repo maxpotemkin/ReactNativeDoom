@@ -14,8 +14,11 @@
     "@shopify/react-native-skia": "^2.6.4",
     "react": "19.2.3",
     "react-native": "0.85.3",
+    "react-native-gesture-handler": "^3.0.0",
     "react-native-nitro-modules": "^0.35.9",
-    "react-native-safe-area-context": "^5.5.2"
+    "react-native-reanimated": "^4.4.0",
+    "react-native-safe-area-context": "^5.5.2",
+    "react-native-worklets": "^0.9.1"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",

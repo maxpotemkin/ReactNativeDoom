@@ -16,6 +16,7 @@ end
 
 target 'ReactNativeDoom' do
   config = use_native_modules!
+  pod 'ReactNativeDoomEngine', :path => '..'
 
   use_react_native!(
     :path => config[:reactNativePath],
