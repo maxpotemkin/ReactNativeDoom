@@ -13,6 +13,7 @@ export interface DoomEngine extends HybridObject<{ ios: 'c++' }> {
   start(iwadPath: string): string;
   tick(): boolean;
   tickAndGetFrame(): ArrayBuffer;
+  tickAndGetFrameAudio(): ArrayBuffer;
   openMenu(): void;
   queueKey(key: string, pressed: boolean): void;
   getFrame(): ArrayBuffer;

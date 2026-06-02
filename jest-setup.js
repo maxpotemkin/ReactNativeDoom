@@ -4,6 +4,10 @@ jest.mock('react-native-worklets', () =>
   require('react-native-worklets/lib/module/mock'),
 );
 
+jest.mock('react-native-audio-api', () =>
+  require('react-native-audio-api/lib/commonjs/mock'),
+);
+
 jest.mock('@shopify/react-native-skia', () => {
   const React = require('react');
   const { View } = require('react-native');
@@ -29,7 +33,7 @@ jest.mock('@shopify/react-native-skia', () => {
 });
 
 jest.mock('./src/doom/DoomEngine', () => {
-  const frame = new ArrayBuffer(640 * 400 * 4);
+  const frame = new ArrayBuffer(320 * 200 * 4);
 
   return {
     doomEngine: {
@@ -46,6 +50,8 @@ jest.mock('./src/doom/DoomEngine', () => {
       queueKey: jest.fn(),
       start: jest.fn(iwadPath => `loaded IWAD: ${iwadPath}`),
       tick: jest.fn(() => true),
+      tickAndGetFrame: jest.fn(() => frame),
+      tickAndGetFrameAudio: jest.fn(() => frame),
     },
   };
 });

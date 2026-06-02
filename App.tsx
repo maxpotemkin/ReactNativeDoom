@@ -20,6 +20,7 @@ import {
 } from '@shopify/react-native-skia';
 
 import { doomEngine } from './src/doom/DoomEngine';
+import { doomAudio } from './src/doom/DoomAudio';
 
 const FRAME_WIDTH = 320;
 const FRAME_HEIGHT = 200;
@@ -61,8 +62,7 @@ function DoomScreen() {
     width: canvasWidth,
   };
 
-  const updateImage = useCallback((frame: ArrayBuffer) => {
-    const bytes = new Uint8Array(frame);
+  const updateImage = useCallback((bytes: Uint8Array) => {
     const data = Skia.Data.fromBytes(bytes);
     const nextImage = Skia.Image.MakeImage(
       {
@@ -118,7 +118,8 @@ function DoomScreen() {
         const startedAt = nowMs();
 
         try {
-          const frame = doomEngine.tickAndGetFrame();
+          const packet = doomEngine.tickAndGetFrameAudio();
+          const frame = doomAudio.extractFrameAndPlayAudio(packet);
           tickCountRef.current += 1;
 
           if (!menuOpenedRef.current && tickCountRef.current > 12) {
@@ -145,7 +146,9 @@ function DoomScreen() {
             setStatus(
               `${doomEngine.windowTitle} frame ${Math.round(
                 frameCount,
-              )} render ${renderCount} ${Math.round(measuredFps)}fps`,
+              )} render ${renderCount} ${Math.round(
+                measuredFps,
+              )}fps audio ${doomAudio.playedCount}`,
             );
           }
         } catch (error) {
