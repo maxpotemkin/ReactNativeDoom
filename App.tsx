@@ -6,7 +6,12 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
-import { GestureHandlerRootView, Pressable } from 'react-native-gesture-handler';
+import {
+  GestureDetector,
+  GestureHandlerRootView,
+  Pressable,
+  usePanGesture,
+} from 'react-native-gesture-handler';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   AlphaType,
@@ -28,6 +33,11 @@ const FRAME_BYTES_PER_ROW = FRAME_WIDTH * 4;
 const TARGET_RENDER_FPS = 60;
 const FRAME_INTERVAL_MS = 1000 / TARGET_RENDER_FPS;
 const STATUS_INTERVAL_MS = 500;
+const STICK_SIZE = 136;
+const STICK_KNOB_SIZE = 58;
+const STICK_CENTER = STICK_SIZE / 2;
+const STICK_MAX_OFFSET = 38;
+const STICK_DEAD_ZONE = 17;
 
 const nowMs = () => Date.now();
 
@@ -240,34 +250,7 @@ function DoomScreen() {
             : { top: controlsTop + 26 },
           isLandscape && styles.controlsLandscape,
         ]}>
-        <View style={styles.dpad}>
-          <ControlButton
-            label="UP"
-            keyName="up"
-            onPressKey={pressKey}
-            overlay={isLandscape}
-          />
-          <View style={styles.dpadRow}>
-            <ControlButton
-              label="LT"
-              keyName="left"
-              onPressKey={pressKey}
-              overlay={isLandscape}
-            />
-            <ControlButton
-              label="RT"
-              keyName="right"
-              onPressKey={pressKey}
-              overlay={isLandscape}
-            />
-          </View>
-          <ControlButton
-            label="DN"
-            keyName="down"
-            onPressKey={pressKey}
-            overlay={isLandscape}
-          />
-        </View>
+        <VirtualStick onPressKey={pressKey} overlay={isLandscape} />
 
         <View style={styles.actions}>
           <ControlButton
@@ -275,6 +258,7 @@ function DoomScreen() {
             keyName="fire"
             onPressKey={pressKey}
             overlay={isLandscape}
+            variant="primary"
           />
           <ControlButton
             label="USE"
@@ -306,6 +290,7 @@ type ControlButtonProps = {
   onPressKey?: (key: string, pressed: boolean) => void;
   onTapKey?: (key: string) => void;
   overlay?: boolean;
+  variant?: 'primary' | 'secondary';
 };
 
 function ControlButton({
@@ -314,6 +299,7 @@ function ControlButton({
   onPressKey,
   onTapKey,
   overlay = false,
+  variant = 'secondary',
 }: ControlButtonProps) {
   const handlePressIn = useCallback(() => {
     onPressKey?.(keyName, true);
@@ -336,13 +322,141 @@ function ControlButton({
       onPressOut={handlePressOut}
       style={({ pressed }) => [
         styles.controlButton,
+        variant === 'primary' && styles.controlButtonPrimary,
         overlay && styles.controlButtonOverlay,
         pressed && styles.controlButtonPressed,
       ]}>
-      <Text style={[styles.controlLabel, overlay && styles.controlLabelOverlay]}>
+      <Text
+        style={[
+          styles.controlLabel,
+          variant === 'primary' && styles.controlLabelPrimary,
+          overlay && styles.controlLabelOverlay,
+        ]}>
         {label}
       </Text>
     </Pressable>
+  );
+}
+
+type MovementKey = 'up' | 'down' | 'left' | 'right';
+
+type VirtualStickProps = {
+  onPressKey: (key: string, pressed: boolean) => void;
+  overlay?: boolean;
+};
+
+function VirtualStick({ onPressKey, overlay = false }: VirtualStickProps) {
+  const [stickOffset, setStickOffset] = useState({
+    active: false,
+    x: 0,
+    y: 0,
+  });
+  const activeKeysRef = useRef<Set<MovementKey>>(new Set());
+
+  const setMovementKeys = useCallback(
+    (nextKeys: MovementKey[]) => {
+      const nextKeySet = new Set(nextKeys);
+      const activeKeys = activeKeysRef.current;
+
+      activeKeys.forEach(key => {
+        if (!nextKeySet.has(key)) {
+          onPressKey(key, false);
+        }
+      });
+
+      nextKeySet.forEach(key => {
+        if (!activeKeys.has(key)) {
+          onPressKey(key, true);
+        }
+      });
+
+      activeKeysRef.current = nextKeySet;
+    },
+    [onPressKey],
+  );
+
+  const updateStickFromPoint = useCallback(
+    (x: number, y: number) => {
+      const rawX = x - STICK_CENTER;
+      const rawY = y - STICK_CENTER;
+      const distance = Math.hypot(rawX, rawY);
+      const scale =
+        distance > STICK_MAX_OFFSET ? STICK_MAX_OFFSET / distance : 1;
+      const nextX = rawX * scale;
+      const nextY = rawY * scale;
+      const nextKeys: MovementKey[] = [];
+
+      if (nextY < -STICK_DEAD_ZONE) {
+        nextKeys.push('up');
+      } else if (nextY > STICK_DEAD_ZONE) {
+        nextKeys.push('down');
+      }
+
+      if (nextX < -STICK_DEAD_ZONE) {
+        nextKeys.push('left');
+      } else if (nextX > STICK_DEAD_ZONE) {
+        nextKeys.push('right');
+      }
+
+      setStickOffset({
+        active: nextKeys.length > 0,
+        x: nextX,
+        y: nextY,
+      });
+      setMovementKeys(nextKeys);
+    },
+    [setMovementKeys],
+  );
+
+  const releaseStick = useCallback(() => {
+    setStickOffset({ active: false, x: 0, y: 0 });
+    setMovementKeys([]);
+  }, [setMovementKeys]);
+
+  const stickGesture = usePanGesture({
+    disableReanimated: true,
+    minDistance: 0,
+    shouldCancelWhenOutside: false,
+    onBegin: event => {
+      updateStickFromPoint(event.x, event.y);
+    },
+    onUpdate: event => {
+      updateStickFromPoint(event.x, event.y);
+    },
+    onFinalize: () => {
+      releaseStick();
+    },
+  });
+
+  return (
+    <GestureDetector gesture={stickGesture}>
+      <View
+        accessibilityLabel="Movement stick"
+        accessibilityRole="adjustable"
+        collapsable={false}
+        style={[
+          styles.stick,
+          overlay && styles.stickOverlay,
+          stickOffset.active && styles.stickActive,
+        ]}>
+        <View style={styles.stickNotchVertical} />
+        <View style={styles.stickNotchHorizontal} />
+        <View style={styles.stickInnerRing} />
+        <View
+          style={[
+            styles.stickKnob,
+            overlay && styles.stickKnobOverlay,
+            {
+              transform: [
+                { translateX: stickOffset.x },
+                { translateY: stickOffset.y },
+              ],
+            },
+          ]}>
+          <View style={styles.stickKnobCore} />
+        </View>
+      </View>
+    </GestureDetector>
   );
 }
 
@@ -353,7 +467,7 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     alignItems: 'center',
-    backgroundColor: '#080909',
+    backgroundColor: '#050706',
   },
   screenLandscape: {
     alignItems: 'stretch',
@@ -361,7 +475,7 @@ const styles = StyleSheet.create({
   },
   canvasFrame: {
     backgroundColor: '#000',
-    borderColor: '#3d4542',
+    borderColor: '#493d36',
     borderWidth: 1,
   },
   canvasFrameLandscape: {
@@ -372,12 +486,13 @@ const styles = StyleSheet.create({
   },
   status: {
     position: 'absolute',
-    color: '#b7c4bd',
+    color: '#d3c8b1',
     fontFamily: 'Menlo',
     fontSize: 12,
+    letterSpacing: 0,
   },
   statusLandscape: {
-    color: '#e0e7df',
+    color: '#f0dfc0',
     fontSize: 11,
     textShadowColor: '#000',
     textShadowOffset: { width: 0, height: 1 },
@@ -385,8 +500,8 @@ const styles = StyleSheet.create({
   },
   controls: {
     position: 'absolute',
-    left: 18,
-    right: 18,
+    left: 14,
+    right: 14,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
@@ -394,44 +509,112 @@ const styles = StyleSheet.create({
   controlsLandscape: {
     alignItems: 'flex-end',
   },
-  dpad: {
-    width: 156,
+  stick: {
+    width: STICK_SIZE,
+    height: STICK_SIZE,
     alignItems: 'center',
-    gap: 8,
+    justifyContent: 'center',
+    overflow: 'hidden',
+    borderRadius: STICK_SIZE / 2,
+    borderWidth: 1,
+    borderColor: '#7e7061',
+    backgroundColor: '#111615',
+    shadowColor: '#000',
+    shadowOpacity: 0.42,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 6 },
   },
-  dpadRow: {
-    width: 156,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+  stickOverlay: {
+    borderColor: 'rgba(245, 218, 167, 0.42)',
+    backgroundColor: 'rgba(12, 14, 13, 0.54)',
+  },
+  stickActive: {
+    borderColor: '#d34a38',
+  },
+  stickInnerRing: {
+    position: 'absolute',
+    width: 92,
+    height: 92,
+    borderRadius: 46,
+    borderWidth: 1,
+    borderColor: 'rgba(223, 196, 149, 0.32)',
+    backgroundColor: 'rgba(0, 0, 0, 0.2)',
+  },
+  stickNotchVertical: {
+    position: 'absolute',
+    width: 2,
+    height: 104,
+    backgroundColor: 'rgba(201, 174, 132, 0.18)',
+  },
+  stickNotchHorizontal: {
+    position: 'absolute',
+    width: 104,
+    height: 2,
+    backgroundColor: 'rgba(201, 174, 132, 0.18)',
+  },
+  stickKnob: {
+    position: 'absolute',
+    left: (STICK_SIZE - STICK_KNOB_SIZE) / 2,
+    top: (STICK_SIZE - STICK_KNOB_SIZE) / 2,
+    width: STICK_KNOB_SIZE,
+    height: STICK_KNOB_SIZE,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: STICK_KNOB_SIZE / 2,
+    borderWidth: 1,
+    borderColor: '#e0c48d',
+    backgroundColor: '#2b302c',
+  },
+  stickKnobOverlay: {
+    backgroundColor: 'rgba(43, 48, 44, 0.78)',
+  },
+  stickKnobCore: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: '#c83f32',
   },
   actions: {
-    width: 176,
+    width: 152,
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'flex-end',
-    gap: 10,
+    gap: 8,
   },
   controlButton: {
-    width: 70,
-    height: 48,
+    width: 72,
+    height: 54,
     alignItems: 'center',
     justifyContent: 'center',
-    borderColor: '#56635d',
+    borderRadius: 8,
+    borderColor: '#756a5c',
     borderWidth: 1,
-    backgroundColor: '#151918',
+    backgroundColor: '#171b1a',
+    shadowColor: '#000',
+    shadowOpacity: 0.35,
+    shadowRadius: 9,
+    shadowOffset: { width: 0, height: 4 },
+  },
+  controlButtonPrimary: {
+    borderColor: '#d4513d',
+    backgroundColor: '#401713',
   },
   controlButtonPressed: {
-    backgroundColor: '#38443d',
+    backgroundColor: '#4c4437',
   },
   controlButtonOverlay: {
-    backgroundColor: 'rgba(8, 10, 10, 0.48)',
-    borderColor: 'rgba(220, 235, 220, 0.38)',
+    backgroundColor: 'rgba(11, 13, 13, 0.58)',
+    borderColor: 'rgba(240, 214, 170, 0.42)',
   },
   controlLabel: {
-    color: '#f3f4e7',
+    color: '#f1e4c8',
     fontFamily: 'Menlo',
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '700',
+    letterSpacing: 0,
+  },
+  controlLabelPrimary: {
+    color: '#fff5df',
   },
   controlLabelOverlay: {
     textShadowColor: '#000',
