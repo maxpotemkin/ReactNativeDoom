@@ -8,6 +8,16 @@ jest.mock('react-native-audio-api', () =>
   require('react-native-audio-api/lib/commonjs/mock'),
 );
 
+jest.mock('react-native-safe-area-context', () => ({
+  SafeAreaProvider: ({ children }) => children,
+  useSafeAreaInsets: () => ({
+    bottom: 0,
+    left: 0,
+    right: 0,
+    top: 0,
+  }),
+}));
+
 jest.mock('@shopify/react-native-skia', () => {
   const React = require('react');
   const { View } = require('react-native');

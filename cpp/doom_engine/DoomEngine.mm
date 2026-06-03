@@ -312,6 +312,8 @@ unsigned char DoomEngine::mapKey(const std::string& key) const {
   if (key == "down") return KEY_DOWNARROW;
   if (key == "left") return KEY_LEFTARROW;
   if (key == "right") return KEY_RIGHTARROW;
+  if (key == "strafe-left") return KEY_STRAFE_L;
+  if (key == "strafe-right") return KEY_STRAFE_R;
   if (key == "fire") return KEY_FIRE;
   if (key == "use") return KEY_USE;
   if (key == "enter") return KEY_ENTER;

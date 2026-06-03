@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   StatusBar,
+  type StyleProp,
   StyleSheet,
   Text,
   useWindowDimensions,
+  type ViewStyle,
   View,
 } from 'react-native';
 import {
@@ -38,8 +40,27 @@ const STICK_KNOB_SIZE = 58;
 const STICK_CENTER = STICK_SIZE / 2;
 const STICK_MAX_OFFSET = 38;
 const STICK_DEAD_ZONE = 17;
+const LOOK_TURN_DEAD_ZONE = 4;
+const LOOK_TURN_RELEASE_MS = 140;
+const RELEASE_KEYS = [
+  'up',
+  'down',
+  'left',
+  'right',
+  'strafe-left',
+  'strafe-right',
+  'fire',
+  'use',
+  'shift',
+  'strafe',
+  'enter',
+  'escape',
+];
 
 const nowMs = () => Date.now();
+
+type ControlScheme = 'current' | 'bethesda';
+type PressKey = (key: string, pressed: boolean, sourceId?: string) => void;
 
 function App() {
   return (
@@ -61,6 +82,14 @@ function DoomScreen() {
   const menuOpenedRef = useRef(false);
   const tickCountRef = useRef(0);
   const weaponSlotRef = useRef(1);
+  const activePressSourcesRef = useRef<Map<string, Set<string>>>(new Map());
+  const schemeRef = useRef<ControlScheme>('current');
+  const [controlScheme, setControlScheme] =
+    useState<ControlScheme>('current');
+  const isBethesdaScheme = controlScheme === 'bethesda';
+  const useCompactBethesdaControls =
+    isBethesdaScheme && !isLandscape && viewportWidth <= 360;
+  const controlsHorizontalInset = useCompactBethesdaControls ? 8 : 14;
 
   const portraitCanvasWidth = Math.min(viewportWidth, viewportHeight * 0.95);
   const portraitCanvasHeight = portraitCanvasWidth * (FRAME_HEIGHT / FRAME_WIDTH);
@@ -187,8 +216,47 @@ function DoomScreen() {
     };
   }, [updateImage]);
 
-  const pressKey = useCallback((key: string, pressed: boolean) => {
-    doomEngine.queueKey(key, pressed);
+  const pressKey = useCallback<PressKey>((key, pressed, sourceId = key) => {
+    const activePressSources = activePressSourcesRef.current;
+    let keySources = activePressSources.get(key);
+
+    if (pressed) {
+      if (keySources?.has(sourceId)) {
+        return;
+      }
+
+      const wasPressed = keySources != null && keySources.size > 0;
+      if (keySources == null) {
+        keySources = new Set<string>();
+        activePressSources.set(key, keySources);
+      }
+
+      keySources.add(sourceId);
+
+      if (!wasPressed) {
+        doomEngine.queueKey(key, true);
+      }
+
+      return;
+    }
+
+    if (keySources == null || !keySources.has(sourceId)) {
+      return;
+    }
+
+    keySources.delete(sourceId);
+
+    if (keySources.size === 0) {
+      activePressSources.delete(key);
+      doomEngine.queueKey(key, false);
+    }
+  }, []);
+
+  const releaseGameplayKeys = useCallback(() => {
+    activePressSourcesRef.current.clear();
+    RELEASE_KEYS.forEach(key => {
+      doomEngine.queueKey(key, false);
+    });
   }, []);
 
   const tapKey = useCallback((key: string) => {
@@ -202,6 +270,15 @@ function DoomScreen() {
     doomEngine.queueKey(String(nextSlot), true);
     doomEngine.queueKey(String(nextSlot), false);
   }, []);
+
+  useEffect(() => {
+    if (schemeRef.current === controlScheme) {
+      return;
+    }
+
+    releaseGameplayKeys();
+    schemeRef.current = controlScheme;
+  }, [controlScheme, releaseGameplayKeys]);
 
   return (
     <View style={[styles.screen, isLandscape && styles.screenLandscape]}>
@@ -246,7 +323,27 @@ function DoomScreen() {
         {status}
       </Text>
 
+      <ControlSchemeToggle
+        scheme={controlScheme}
+        onChange={setControlScheme}
+        overlay={isLandscape}
+        style={
+          isLandscape
+            ? {
+                right: Math.max(insets.right + 10, 10),
+                top: Math.max(insets.top + 8, 8),
+              }
+            : {
+                right: 14,
+                top: insets.top + 14,
+              }
+        }
+      />
+
+      {isBethesdaScheme && <LookTurnPad onPressKey={pressKey} />}
+
       <View
+        pointerEvents="box-none"
         style={[
           styles.controls,
           isLandscape
@@ -255,84 +352,408 @@ function DoomScreen() {
                 left: Math.max(insets.left + 14, 14),
                 right: Math.max(insets.right + 14, 14),
               }
-            : { top: controlsTop + 26 },
+            : {
+                left: controlsHorizontalInset,
+                right: controlsHorizontalInset,
+                top: controlsTop + 26,
+              },
           isLandscape && styles.controlsLandscape,
         ]}>
-        <VirtualStick onPressKey={pressKey} overlay={isLandscape} />
+        <LeftControls
+          scheme={controlScheme}
+          onPressKey={pressKey}
+          overlay={isLandscape}
+        />
 
-        <View style={styles.actions}>
-          <ControlButton
-            label="FIRE"
-            keyName="fire"
+        {isBethesdaScheme ? (
+          <BethesdaActions
             onPressKey={pressKey}
-            overlay={isLandscape}
-            variant="primary"
-          />
-          <ControlButton
-            label="USE"
-            keyName="use"
-            onPressKey={pressKey}
-            overlay={isLandscape}
-          />
-          <ControlButton
-            label="RUN"
-            keyName="shift"
-            onPressKey={pressKey}
-            overlay={isLandscape}
-          />
-          <ControlButton
-            label="STRF"
-            keyName="strafe"
-            onPressKey={pressKey}
-            overlay={isLandscape}
-            accessibilityLabel="STRAFE"
-          />
-          <ControlButton
-            label="MAP"
-            keyName="tab"
             onTapKey={tapKey}
+            onCycleWeapon={cycleWeapon}
             overlay={isLandscape}
+            compact={useCompactBethesdaControls}
           />
-          <ControlButton
-            label="W+"
-            keyName="weapon-next"
-            onTap={() => cycleWeapon(1)}
-            overlay={isLandscape}
-            accessibilityLabel="WEAPON NEXT"
-          />
-          <ControlButton
-            label="W-"
-            keyName="weapon-prev"
-            onTap={() => cycleWeapon(-1)}
-            overlay={isLandscape}
-            accessibilityLabel="WEAPON PREVIOUS"
-          />
-          <ControlButton
-            label="OK"
-            keyName="enter"
-            onTapKey={tapKey}
-            overlay={isLandscape}
-          />
-          <ControlButton
-            label="MENU"
-            keyName="escape"
+        ) : (
+          <CurrentActions
             onPressKey={pressKey}
+            onTapKey={tapKey}
+            onCycleWeapon={cycleWeapon}
             overlay={isLandscape}
           />
-        </View>
+        )}
       </View>
     </View>
+  );
+}
+
+type ControlSchemeToggleProps = {
+  scheme: ControlScheme;
+  onChange: (scheme: ControlScheme) => void;
+  overlay: boolean;
+  style: StyleProp<ViewStyle>;
+};
+
+function ControlSchemeToggle({
+  scheme,
+  onChange,
+  overlay,
+  style,
+}: ControlSchemeToggleProps) {
+  const selectCurrent = useCallback(() => {
+    onChange('current');
+  }, [onChange]);
+
+  const selectBethesda = useCallback(() => {
+    onChange('bethesda');
+  }, [onChange]);
+
+  return (
+    <View
+      accessibilityLabel="Control scheme"
+      style={[styles.schemeToggle, overlay && styles.schemeToggleOverlay, style]}>
+      <Pressable
+        testID="control-scheme-current"
+        accessibilityRole="button"
+        accessibilityLabel="Current controls"
+        onPress={selectCurrent}
+        style={[
+          styles.schemeToggleOption,
+          scheme === 'current' && styles.schemeToggleOptionActive,
+        ]}>
+        <Text
+          style={[
+            styles.schemeToggleLabel,
+            scheme === 'current' && styles.schemeToggleLabelActive,
+          ]}>
+          OURS
+        </Text>
+      </Pressable>
+      <Pressable
+        testID="control-scheme-bethesda"
+        accessibilityRole="button"
+        accessibilityLabel="Bethesda-style controls"
+        onPress={selectBethesda}
+        style={[
+          styles.schemeToggleOption,
+          scheme === 'bethesda' && styles.schemeToggleOptionActive,
+        ]}>
+        <Text
+          style={[
+            styles.schemeToggleLabel,
+            scheme === 'bethesda' && styles.schemeToggleLabelActive,
+          ]}>
+          BETH
+        </Text>
+      </Pressable>
+    </View>
+  );
+}
+
+type ControlActionsProps = {
+  onPressKey: PressKey;
+  onTapKey: (key: string) => void;
+  onCycleWeapon: (direction: 1 | -1) => void;
+  overlay: boolean;
+  compact?: boolean;
+};
+
+function LeftControls({
+  scheme,
+  onPressKey,
+  overlay,
+}: {
+  scheme: ControlScheme;
+  onPressKey: PressKey;
+  overlay: boolean;
+}) {
+  const isBethesdaScheme = scheme === 'bethesda';
+
+  return (
+    <View
+      pointerEvents="box-none"
+      style={[
+        styles.leftControls,
+        isBethesdaScheme && styles.leftControlsBethesda,
+      ]}>
+      {isBethesdaScheme && (
+        <ControlButton
+          label="FIRE"
+          keyName="fire"
+          onPressKey={onPressKey}
+          overlay={overlay}
+          variant="primary"
+          size="wide"
+          pressSourceId="bethesda-left-fire"
+          testID="left-fire-button"
+          accessibilityLabel="LEFT FIRE"
+        />
+      )}
+      <VirtualStick
+        onPressKey={onPressKey}
+        overlay={overlay}
+        horizontalMode={isBethesdaScheme ? 'strafe' : 'turn'}
+      />
+    </View>
+  );
+}
+
+function CurrentActions({
+  onPressKey,
+  onTapKey,
+  onCycleWeapon,
+  overlay,
+}: ControlActionsProps) {
+  return (
+    <View style={styles.actions}>
+      <ControlButton
+        label="FIRE"
+        keyName="fire"
+        onPressKey={onPressKey}
+        overlay={overlay}
+        variant="primary"
+      />
+      <ControlButton
+        label="USE"
+        keyName="use"
+        onPressKey={onPressKey}
+        overlay={overlay}
+      />
+      <ControlButton
+        label="RUN"
+        keyName="shift"
+        onPressKey={onPressKey}
+        overlay={overlay}
+      />
+      <ControlButton
+        label="STRF"
+        keyName="strafe"
+        onPressKey={onPressKey}
+        overlay={overlay}
+        accessibilityLabel="STRAFE"
+      />
+      <ControlButton
+        label="MAP"
+        keyName="tab"
+        onTapKey={onTapKey}
+        overlay={overlay}
+      />
+      <ControlButton
+        label="W+"
+        keyName="weapon-next"
+        onTap={() => onCycleWeapon(1)}
+        overlay={overlay}
+        accessibilityLabel="WEAPON NEXT"
+      />
+      <ControlButton
+        label="W-"
+        keyName="weapon-prev"
+        onTap={() => onCycleWeapon(-1)}
+        overlay={overlay}
+        accessibilityLabel="WEAPON PREVIOUS"
+      />
+      <ControlButton
+        label="OK"
+        keyName="enter"
+        onTapKey={onTapKey}
+        overlay={overlay}
+      />
+      <ControlButton
+        label="MENU"
+        keyName="escape"
+        onPressKey={onPressKey}
+        overlay={overlay}
+      />
+    </View>
+  );
+}
+
+function BethesdaActions({
+  onPressKey,
+  onTapKey,
+  onCycleWeapon,
+  overlay,
+  compact = false,
+}: ControlActionsProps) {
+  return (
+    <View style={[styles.bethesdaActions, compact && styles.bethesdaActionsCompact]}>
+      <View
+        style={[
+          styles.bethesdaUtilityGrid,
+          compact && styles.bethesdaUtilityGridCompact,
+        ]}>
+        <ControlButton
+          label="USE"
+          keyName="use"
+          onPressKey={onPressKey}
+          overlay={overlay}
+          size={compact ? 'tiny' : 'compact'}
+        />
+        <ControlButton
+          label="RUN"
+          keyName="shift"
+          onPressKey={onPressKey}
+          overlay={overlay}
+          size={compact ? 'tiny' : 'compact'}
+        />
+        <ControlButton
+          label="STRF"
+          keyName="strafe"
+          onPressKey={onPressKey}
+          overlay={overlay}
+          size={compact ? 'tiny' : 'compact'}
+          accessibilityLabel="STRAFE"
+        />
+        <ControlButton
+          label="MAP"
+          keyName="tab"
+          onTapKey={onTapKey}
+          overlay={overlay}
+          size={compact ? 'tiny' : 'compact'}
+        />
+        <ControlButton
+          label="W-"
+          keyName="weapon-prev"
+          onTap={() => onCycleWeapon(-1)}
+          overlay={overlay}
+          size={compact ? 'tiny' : 'compact'}
+          accessibilityLabel="WEAPON PREVIOUS"
+        />
+        <ControlButton
+          label="W+"
+          keyName="weapon-next"
+          onTap={() => onCycleWeapon(1)}
+          overlay={overlay}
+          size={compact ? 'tiny' : 'compact'}
+          accessibilityLabel="WEAPON NEXT"
+        />
+        <ControlButton
+          label="OK"
+          keyName="enter"
+          onTapKey={onTapKey}
+          overlay={overlay}
+          size={compact ? 'tiny' : 'compact'}
+        />
+        <ControlButton
+          label="MENU"
+          keyName="escape"
+          onPressKey={onPressKey}
+          overlay={overlay}
+          size={compact ? 'tiny' : 'compact'}
+        />
+      </View>
+      <ControlButton
+        label="FIRE"
+        keyName="fire"
+        onPressKey={onPressKey}
+        overlay={overlay}
+        variant="primary"
+        size={compact ? 'narrowLarge' : 'large'}
+        pressSourceId="bethesda-right-fire"
+      />
+    </View>
+  );
+}
+
+type TurnKey = 'left' | 'right';
+
+function LookTurnPad({
+  onPressKey,
+}: {
+  onPressKey: PressKey;
+}) {
+  const activeTurnKeyRef = useRef<TurnKey | null>(null);
+  const releaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const startXRef = useRef(0);
+
+  const clearReleaseTimer = useCallback(() => {
+    if (releaseTimerRef.current != null) {
+      clearTimeout(releaseTimerRef.current);
+      releaseTimerRef.current = null;
+    }
+  }, []);
+
+  const setTurnKey = useCallback(
+    (nextKey: TurnKey | null) => {
+      const activeTurnKey = activeTurnKeyRef.current;
+
+      if (activeTurnKey === nextKey) {
+        return;
+      }
+
+      if (activeTurnKey != null) {
+        onPressKey(activeTurnKey, false);
+      }
+
+      if (nextKey != null) {
+        onPressKey(nextKey, true);
+      }
+
+      activeTurnKeyRef.current = nextKey;
+    },
+    [onPressKey],
+  );
+
+  const releaseTurnKey = useCallback(() => {
+    clearReleaseTimer();
+    setTurnKey(null);
+  }, [clearReleaseTimer, setTurnKey]);
+
+  const scheduleTurnRelease = useCallback(() => {
+    clearReleaseTimer();
+    releaseTimerRef.current = setTimeout(() => {
+      setTurnKey(null);
+    }, LOOK_TURN_RELEASE_MS);
+  }, [clearReleaseTimer, setTurnKey]);
+
+  useEffect(() => releaseTurnKey, [releaseTurnKey]);
+
+  const lookGesture = usePanGesture({
+    disableReanimated: true,
+    minDistance: 0,
+    shouldCancelWhenOutside: false,
+    onBegin: event => {
+      startXRef.current = event.x;
+      releaseTurnKey();
+    },
+    onUpdate: event => {
+      const dragX = event.x - startXRef.current;
+
+      if (Math.abs(dragX) < LOOK_TURN_DEAD_ZONE) {
+        setTurnKey(null);
+        return;
+      }
+
+      setTurnKey(dragX > 0 ? 'right' : 'left');
+      scheduleTurnRelease();
+    },
+    onFinalize: () => {
+      releaseTurnKey();
+    },
+  });
+
+  return (
+    <GestureDetector gesture={lookGesture}>
+      <View
+        accessibilityLabel="Look turn area"
+        collapsable={false}
+        testID="look-turn-area"
+        style={styles.lookTurnPad}
+      />
+    </GestureDetector>
   );
 }
 
 type ControlButtonProps = {
   label: string;
   keyName: string;
-  onPressKey?: (key: string, pressed: boolean) => void;
+  onPressKey?: PressKey;
   onTapKey?: (key: string) => void;
   onTap?: () => void;
   overlay?: boolean;
   variant?: 'primary' | 'secondary';
+  size?: 'normal' | 'compact' | 'tiny' | 'wide' | 'large' | 'narrowLarge';
+  pressSourceId?: string;
+  testID?: string;
   accessibilityLabel?: string;
 };
 
@@ -344,15 +765,18 @@ function ControlButton({
   onTap,
   overlay = false,
   variant = 'secondary',
+  size = 'normal',
+  pressSourceId,
+  testID,
   accessibilityLabel,
 }: ControlButtonProps) {
   const handlePressIn = useCallback(() => {
-    onPressKey?.(keyName, true);
-  }, [keyName, onPressKey]);
+    onPressKey?.(keyName, true, pressSourceId ?? keyName);
+  }, [keyName, onPressKey, pressSourceId]);
 
   const handlePressOut = useCallback(() => {
-    onPressKey?.(keyName, false);
-  }, [keyName, onPressKey]);
+    onPressKey?.(keyName, false, pressSourceId ?? keyName);
+  }, [keyName, onPressKey, pressSourceId]);
 
   const handlePress = useCallback(() => {
     onTap?.();
@@ -361,6 +785,7 @@ function ControlButton({
 
   return (
     <Pressable
+      testID={testID}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel ?? label}
       onPress={handlePress}
@@ -368,6 +793,11 @@ function ControlButton({
       onPressOut={handlePressOut}
       style={({ pressed }) => [
         styles.controlButton,
+        size === 'compact' && styles.controlButtonCompact,
+        size === 'tiny' && styles.controlButtonTiny,
+        size === 'wide' && styles.controlButtonWide,
+        size === 'large' && styles.controlButtonLarge,
+        size === 'narrowLarge' && styles.controlButtonNarrowLarge,
         variant === 'primary' && styles.controlButtonPrimary,
         overlay && styles.controlButtonOverlay,
         pressed && styles.controlButtonPressed,
@@ -375,6 +805,10 @@ function ControlButton({
       <Text
         style={[
           styles.controlLabel,
+          size === 'compact' && styles.controlLabelCompact,
+          size === 'tiny' && styles.controlLabelTiny,
+          size === 'large' && styles.controlLabelLarge,
+          size === 'narrowLarge' && styles.controlLabelNarrowLarge,
           variant === 'primary' && styles.controlLabelPrimary,
           overlay && styles.controlLabelOverlay,
         ]}>
@@ -385,22 +819,29 @@ function ControlButton({
 }
 
 type MovementKey = 'up' | 'down' | 'left' | 'right';
+type StickInputKey = MovementKey | 'strafe-left' | 'strafe-right';
+type StickHorizontalMode = 'turn' | 'strafe';
 
 type VirtualStickProps = {
-  onPressKey: (key: string, pressed: boolean) => void;
+  onPressKey: PressKey;
   overlay?: boolean;
+  horizontalMode?: StickHorizontalMode;
 };
 
-function VirtualStick({ onPressKey, overlay = false }: VirtualStickProps) {
+function VirtualStick({
+  onPressKey,
+  overlay = false,
+  horizontalMode = 'turn',
+}: VirtualStickProps) {
   const [stickOffset, setStickOffset] = useState({
     active: false,
     x: 0,
     y: 0,
   });
-  const activeKeysRef = useRef<Set<MovementKey>>(new Set());
+  const activeKeysRef = useRef<Set<StickInputKey>>(new Set());
 
   const setMovementKeys = useCallback(
-    (nextKeys: MovementKey[]) => {
+    (nextKeys: StickInputKey[]) => {
       const nextKeySet = new Set(nextKeys);
       const activeKeys = activeKeysRef.current;
 
@@ -430,7 +871,8 @@ function VirtualStick({ onPressKey, overlay = false }: VirtualStickProps) {
         distance > STICK_MAX_OFFSET ? STICK_MAX_OFFSET / distance : 1;
       const nextX = rawX * scale;
       const nextY = rawY * scale;
-      const nextKeys: MovementKey[] = [];
+      const nextKeys: StickInputKey[] = [];
+      let horizontalKey: MovementKey | null = null;
 
       if (nextY < -STICK_DEAD_ZONE) {
         nextKeys.push('up');
@@ -439,9 +881,19 @@ function VirtualStick({ onPressKey, overlay = false }: VirtualStickProps) {
       }
 
       if (nextX < -STICK_DEAD_ZONE) {
-        nextKeys.push('left');
+        horizontalKey = 'left';
       } else if (nextX > STICK_DEAD_ZONE) {
-        nextKeys.push('right');
+        horizontalKey = 'right';
+      }
+
+      if (horizontalKey != null) {
+        nextKeys.push(
+          horizontalMode === 'strafe'
+            ? horizontalKey === 'left'
+              ? 'strafe-left'
+              : 'strafe-right'
+            : horizontalKey,
+        );
       }
 
       setStickOffset({
@@ -451,13 +903,15 @@ function VirtualStick({ onPressKey, overlay = false }: VirtualStickProps) {
       });
       setMovementKeys(nextKeys);
     },
-    [setMovementKeys],
+    [horizontalMode, setMovementKeys],
   );
 
   const releaseStick = useCallback(() => {
     setStickOffset({ active: false, x: 0, y: 0 });
     setMovementKeys([]);
   }, [setMovementKeys]);
+
+  useEffect(() => releaseStick, [releaseStick]);
 
   const stickGesture = usePanGesture({
     disableReanimated: true,
@@ -536,6 +990,7 @@ const styles = StyleSheet.create({
     fontFamily: 'Menlo',
     fontSize: 12,
     letterSpacing: 0,
+    zIndex: 3,
   },
   statusLandscape: {
     color: '#f0dfc0',
@@ -551,9 +1006,60 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    zIndex: 2,
   },
   controlsLandscape: {
     alignItems: 'flex-end',
+  },
+  schemeToggle: {
+    position: 'absolute',
+    flexDirection: 'row',
+    overflow: 'hidden',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#675d51',
+    backgroundColor: '#101312',
+    zIndex: 4,
+  },
+  schemeToggleOverlay: {
+    borderColor: 'rgba(240, 214, 170, 0.42)',
+    backgroundColor: 'rgba(11, 13, 13, 0.62)',
+  },
+  schemeToggleOption: {
+    width: 54,
+    height: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  schemeToggleOptionActive: {
+    backgroundColor: '#3b1712',
+  },
+  schemeToggleLabel: {
+    color: '#b9ad93',
+    fontFamily: 'Menlo',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0,
+  },
+  schemeToggleLabelActive: {
+    color: '#fff0d2',
+  },
+  lookTurnPad: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    top: 0,
+    zIndex: 1,
+  },
+  leftControls: {
+    minHeight: STICK_SIZE,
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+  },
+  leftControlsBethesda: {
+    minHeight: STICK_SIZE + 52,
+    gap: 8,
   },
   stick: {
     width: STICK_SIZE,
@@ -627,6 +1133,27 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     gap: 7,
   },
+  bethesdaActions: {
+    width: 176,
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'flex-end',
+    gap: 8,
+  },
+  bethesdaActionsCompact: {
+    width: 146,
+    gap: 6,
+  },
+  bethesdaUtilityGrid: {
+    width: 94,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
+    gap: 6,
+  },
+  bethesdaUtilityGridCompact: {
+    width: 84,
+  },
   controlButton: {
     width: 46,
     height: 44,
@@ -640,6 +1167,26 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.35,
     shadowRadius: 9,
     shadowOffset: { width: 0, height: 4 },
+  },
+  controlButtonCompact: {
+    width: 44,
+    height: 40,
+  },
+  controlButtonTiny: {
+    width: 39,
+    height: 38,
+  },
+  controlButtonWide: {
+    width: 74,
+    height: 44,
+  },
+  controlButtonLarge: {
+    width: 74,
+    height: 86,
+  },
+  controlButtonNarrowLarge: {
+    width: 56,
+    height: 82,
   },
   controlButtonPrimary: {
     borderColor: '#d4513d',
@@ -658,6 +1205,18 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
     letterSpacing: 0,
+  },
+  controlLabelCompact: {
+    fontSize: 10,
+  },
+  controlLabelTiny: {
+    fontSize: 9,
+  },
+  controlLabelLarge: {
+    fontSize: 12,
+  },
+  controlLabelNarrowLarge: {
+    fontSize: 11,
   },
   controlLabelPrimary: {
     color: '#fff5df',
