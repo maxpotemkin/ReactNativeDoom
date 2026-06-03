@@ -7,9 +7,9 @@ Pod::Spec.new do |s|
   s.name         = "ReactNativeDoomEngine"
   s.version      = package["version"]
   s.summary      = "iOS Doom engine bridge for ReactNativeDoom"
-  s.description  = "Local Nitro HybridObject bridge that runs doomgeneric and exposes rendered frames to React Native."
-  s.homepage     = "https://github.com/ozkl/doomgeneric"
-  s.license      = { :type => "GPL-2.0", :file => "third_party/doomgeneric/LICENSE" }
+  s.description  = "Local Nitro HybridObject bridge that runs a user-supplied Doom-compatible engine source tree and exposes rendered frames to React Native."
+  s.homepage     = package["homepage"] || "https://reactnative.dev"
+  s.license      = { :type => package["license"] || "MIT", :file => "LICENSE" }
   s.authors      = package["name"]
   s.source       = { :path => "." }
   s.platforms    = { :ios => min_ios_version_supported }
