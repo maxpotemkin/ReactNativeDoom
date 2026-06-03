@@ -316,6 +316,7 @@ unsigned char DoomEngine::mapKey(const std::string& key) const {
   if (key == "use") return KEY_USE;
   if (key == "enter") return KEY_ENTER;
   if (key == "escape") return KEY_ESCAPE;
+  if (key == "tab") return KEY_TAB;
   if (key == "shift") return KEY_RSHIFT;
   if (key == "strafe") return KEY_LALT;
   if (key.size() == 1) return static_cast<unsigned char>(key[0]);

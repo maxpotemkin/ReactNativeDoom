@@ -60,6 +60,7 @@ function DoomScreen() {
   const imageRef = useRef<SkImage | null>(null);
   const menuOpenedRef = useRef(false);
   const tickCountRef = useRef(0);
+  const weaponSlotRef = useRef(1);
 
   const portraitCanvasWidth = Math.min(viewportWidth, viewportHeight * 0.95);
   const portraitCanvasHeight = portraitCanvasWidth * (FRAME_HEIGHT / FRAME_WIDTH);
@@ -195,6 +196,13 @@ function DoomScreen() {
     doomEngine.queueKey(key, false);
   }, []);
 
+  const cycleWeapon = useCallback((direction: 1 | -1) => {
+    const nextSlot = ((weaponSlotRef.current - 1 + direction + 8) % 8) + 1;
+    weaponSlotRef.current = nextSlot;
+    doomEngine.queueKey(String(nextSlot), true);
+    doomEngine.queueKey(String(nextSlot), false);
+  }, []);
+
   return (
     <View style={[styles.screen, isLandscape && styles.screenLandscape]}>
       <StatusBar barStyle="light-content" hidden={isLandscape} />
@@ -267,6 +275,39 @@ function DoomScreen() {
             overlay={isLandscape}
           />
           <ControlButton
+            label="RUN"
+            keyName="shift"
+            onPressKey={pressKey}
+            overlay={isLandscape}
+          />
+          <ControlButton
+            label="STRF"
+            keyName="strafe"
+            onPressKey={pressKey}
+            overlay={isLandscape}
+            accessibilityLabel="STRAFE"
+          />
+          <ControlButton
+            label="MAP"
+            keyName="tab"
+            onTapKey={tapKey}
+            overlay={isLandscape}
+          />
+          <ControlButton
+            label="W+"
+            keyName="weapon-next"
+            onTap={() => cycleWeapon(1)}
+            overlay={isLandscape}
+            accessibilityLabel="WEAPON NEXT"
+          />
+          <ControlButton
+            label="W-"
+            keyName="weapon-prev"
+            onTap={() => cycleWeapon(-1)}
+            overlay={isLandscape}
+            accessibilityLabel="WEAPON PREVIOUS"
+          />
+          <ControlButton
             label="OK"
             keyName="enter"
             onTapKey={tapKey}
@@ -289,8 +330,10 @@ type ControlButtonProps = {
   keyName: string;
   onPressKey?: (key: string, pressed: boolean) => void;
   onTapKey?: (key: string) => void;
+  onTap?: () => void;
   overlay?: boolean;
   variant?: 'primary' | 'secondary';
+  accessibilityLabel?: string;
 };
 
 function ControlButton({
@@ -298,8 +341,10 @@ function ControlButton({
   keyName,
   onPressKey,
   onTapKey,
+  onTap,
   overlay = false,
   variant = 'secondary',
+  accessibilityLabel,
 }: ControlButtonProps) {
   const handlePressIn = useCallback(() => {
     onPressKey?.(keyName, true);
@@ -310,13 +355,14 @@ function ControlButton({
   }, [keyName, onPressKey]);
 
   const handlePress = useCallback(() => {
+    onTap?.();
     onTapKey?.(keyName);
-  }, [keyName, onTapKey]);
+  }, [keyName, onTap, onTapKey]);
 
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={label}
+      accessibilityLabel={accessibilityLabel ?? label}
       onPress={handlePress}
       onPressIn={handlePressIn}
       onPressOut={handlePressOut}
@@ -579,11 +625,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'flex-end',
-    gap: 8,
+    gap: 7,
   },
   controlButton: {
-    width: 72,
-    height: 54,
+    width: 46,
+    height: 44,
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: 8,
@@ -609,7 +655,7 @@ const styles = StyleSheet.create({
   controlLabel: {
     color: '#f1e4c8',
     fontFamily: 'Menlo',
-    fontSize: 14,
+    fontSize: 11,
     fontWeight: '700',
     letterSpacing: 0,
   },
