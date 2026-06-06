@@ -1,6 +1,8 @@
 # React Native Doom
 
-React Native Doom is an iOS-first React Native prototype that renders Doom frames through a native Nitro bridge and displays them with React Native Skia.
+![React Native Doom running on iOS](docs/readme/doom-hero.jpg)
+
+React Native Doom is an iOS-first React Native prototype that renders Doom frames through a native Nitro bridge and displays them with React Native Skia. It includes full Doom sound playback support through React Native Audio API.
 
 ## License
 
