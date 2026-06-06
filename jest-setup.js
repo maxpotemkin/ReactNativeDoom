@@ -31,7 +31,9 @@ jest.mock('@shopify/react-native-skia', () => {
     MipmapMode: { None: 'None' },
     Skia: {
       Data: {
-        fromBytes: bytes => bytes,
+        fromBytes: () => ({
+          dispose: jest.fn(),
+        }),
       },
       Image: {
         MakeImage: () => ({

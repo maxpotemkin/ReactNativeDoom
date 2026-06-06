@@ -83,5 +83,6 @@ private:
 
 void registerDoomEngineHybridObject();
 DoomEngine* currentDoomEngine();
+std::string findBundledIWadPath();
 
 } // namespace reactnativedoom

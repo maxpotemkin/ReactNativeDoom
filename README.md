@@ -1,8 +1,10 @@
 # React Native Doom
 
-![React Native Doom running on iOS](docs/readme/doom-hero.jpg)
+![React Native Doom running on iOS simulator](docs/readme/doom-hero.png)
 
-React Native Doom is an iOS-first React Native prototype that renders Doom frames through a native Nitro bridge and displays them with React Native Skia. It includes full Doom sound playback support through React Native Audio API.
+React Native Doom is a React Native prototype that renders Doom frames on iOS and Android through a native Nitro bridge and displays them with React Native Skia. Both platforms expose the Doom engine as a `react-native-nitro-modules` C++ HybridObject. It includes full Doom sound playback support through React Native Audio API.
+
+Supported platforms: iOS and Android.
 
 ## License
 
@@ -60,6 +62,12 @@ Build and launch on an available iOS simulator:
 npm run ios
 ```
 
+Build and launch on an available Android emulator or device:
+
+```sh
+npm run android
+```
+
 ## Development
 
 Useful checks:
@@ -70,4 +78,4 @@ npm run lint
 npm test -- --runInBand --no-watchman
 ```
 
-The main React Native UI lives in `App.tsx`. JS bridge wrappers are in `src/doom/`, and the native iOS bridge is in `cpp/doom_engine/` plus `ios/ReactNativeDoomEngine/`.
+The main React Native UI lives in `App.tsx`. JS bridge wrappers are in `src/doom/`, the shared native bridge is in `cpp/doom_engine/`, and platform wiring lives in `ios/ReactNativeDoomEngine/` plus `android/app/src/main/`.

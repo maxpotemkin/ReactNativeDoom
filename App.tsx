@@ -15,6 +15,11 @@ import {
   usePanGesture,
 } from 'react-native-gesture-handler';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+} from 'react-native-reanimated';
+import { scheduleOnRN } from 'react-native-worklets';
 import {
   AlphaType,
   Canvas,
@@ -34,6 +39,8 @@ const FRAME_HEIGHT = 200;
 const FRAME_BYTES_PER_ROW = FRAME_WIDTH * 4;
 const TARGET_RENDER_FPS = 60;
 const FRAME_INTERVAL_MS = 1000 / TARGET_RENDER_FPS;
+const MIN_FRAME_DELTA_MS = FRAME_INTERVAL_MS * 0.9;
+const RETAINED_FRAME_COUNT = 8;
 const STATUS_INTERVAL_MS = 500;
 const STICK_SIZE = 136;
 const STICK_KNOB_SIZE = 58;
@@ -57,6 +64,8 @@ const RELEASE_KEYS = [
   'escape',
 ];
 
+const STICK_KEY_SEPARATOR = '|';
+
 const nowMs = () => Date.now();
 
 type ControlScheme = 'current' | 'bethesda';
@@ -76,9 +85,10 @@ function DoomScreen() {
   const insets = useSafeAreaInsets();
   const { width: viewportWidth, height: viewportHeight } = useWindowDimensions();
   const isLandscape = viewportWidth > viewportHeight;
-  const [image, setImage] = useState<SkImage | null>(null);
+  const image = useSharedValue<SkImage | null>(null);
   const [status, setStatus] = useState('booting');
   const imageRef = useRef<SkImage | null>(null);
+  const retainedImagesRef = useRef<SkImage[]>([]);
   const menuOpenedRef = useRef(false);
   const tickCountRef = useRef(0);
   const weaponSlotRef = useRef(1);
@@ -104,29 +114,43 @@ function DoomScreen() {
 
   const updateImage = useCallback((bytes: Uint8Array) => {
     const data = Skia.Data.fromBytes(bytes);
-    const nextImage = Skia.Image.MakeImage(
-      {
-        width: FRAME_WIDTH,
-        height: FRAME_HEIGHT,
-        colorType: ColorType.RGBA_8888,
-        alphaType: AlphaType.Opaque,
-      },
-      data,
-      FRAME_BYTES_PER_ROW,
-    );
+    let nextImage: SkImage | null = null;
+
+    try {
+      nextImage = Skia.Image.MakeImage(
+        {
+          width: FRAME_WIDTH,
+          height: FRAME_HEIGHT,
+          colorType: ColorType.RGBA_8888,
+          alphaType: AlphaType.Opaque,
+        },
+        data,
+        FRAME_BYTES_PER_ROW,
+      );
+    } finally {
+      data.dispose();
+    }
 
     if (nextImage != null) {
-      setImage(previousImage => {
-        previousImage?.dispose();
-        imageRef.current = nextImage;
-        return nextImage;
-      });
+      const previousImage = imageRef.current;
+      imageRef.current = nextImage;
+      image.value = nextImage;
+
+      if (previousImage != null) {
+        const retainedImages = retainedImagesRef.current;
+        retainedImages.push(previousImage);
+
+        if (retainedImages.length > RETAINED_FRAME_COUNT) {
+          retainedImages.shift()?.dispose();
+        }
+      }
     }
-  }, []);
+  }, [image]);
 
   useEffect(() => {
     let cancelled = false;
-    let renderTimer: ReturnType<typeof setTimeout> | undefined;
+    let animationFrameId: number | undefined;
+    let lastRenderTimestamp = 0;
     let lastStatusTime = 0;
     let lastStatusRenderCount = 0;
     let renderCount = 0;
@@ -146,16 +170,24 @@ function DoomScreen() {
         return;
       }
 
-      const scheduleRender = (delayMs: number) => {
-        renderTimer = setTimeout(render, delayMs);
+      const scheduleRender = () => {
+        animationFrameId = requestAnimationFrame(render);
       };
 
-      const render = () => {
+      const render = (timestamp: number) => {
         if (cancelled) {
           return;
         }
 
-        const startedAt = nowMs();
+        if (
+          lastRenderTimestamp !== 0 &&
+          timestamp - lastRenderTimestamp < MIN_FRAME_DELTA_MS
+        ) {
+          scheduleRender();
+          return;
+        }
+
+        lastRenderTimestamp = timestamp;
 
         try {
           const packet = doomEngine.tickAndGetFrameAudio();
@@ -171,16 +203,14 @@ function DoomScreen() {
           updateImage(frame);
           renderCount += 1;
 
-          const timestamp = nowMs();
-          if (timestamp - lastStatusTime >= STATUS_INTERVAL_MS) {
+          const statusTimestamp = nowMs();
+          if (statusTimestamp - lastStatusTime >= STATUS_INTERVAL_MS) {
             const frameCount = doomEngine.frameCount;
-            const elapsedSeconds = (timestamp - lastStatusTime) / 1000;
+            const elapsedSeconds = (statusTimestamp - lastStatusTime) / 1000;
             const measuredFps =
-              lastStatusTime === 0
-                ? TARGET_RENDER_FPS
-                : (renderCount - lastStatusRenderCount) / elapsedSeconds;
+              (renderCount - lastStatusRenderCount) / elapsedSeconds;
 
-            lastStatusTime = timestamp;
+            lastStatusTime = statusTimestamp;
             lastStatusRenderCount = renderCount;
 
             setStatus(
@@ -198,23 +228,29 @@ function DoomScreen() {
           setStatus(message);
         }
 
-        scheduleRender(Math.max(0, FRAME_INTERVAL_MS - (nowMs() - startedAt)));
+        scheduleRender();
       };
 
-      scheduleRender(0);
+      lastStatusTime = nowMs();
+      scheduleRender();
     };
 
     start();
 
     return () => {
       cancelled = true;
-      if (renderTimer != null) {
-        clearTimeout(renderTimer);
+      if (animationFrameId != null) {
+        cancelAnimationFrame(animationFrameId);
       }
+      image.value = null;
       imageRef.current?.dispose();
       imageRef.current = null;
+      retainedImagesRef.current.forEach(retainedImage => {
+        retainedImage.dispose();
+      });
+      retainedImagesRef.current = [];
     };
-  }, [updateImage]);
+  }, [image, updateImage]);
 
   const pressKey = useCallback<PressKey>((key, pressed, sourceId = key) => {
     const activePressSources = activePressSourcesRef.current;
@@ -291,20 +327,18 @@ function DoomScreen() {
           canvasFrameLayout,
         ]}>
         <Canvas style={styles.canvas}>
-          {image != null && (
-            <Image
-              image={image}
-              x={0}
-              y={0}
-              width={canvasWidth}
-              height={canvasHeight}
-              fit="fill"
-              sampling={{
-                filter: FilterMode.Nearest,
-                mipmap: MipmapMode.None,
-              }}
-            />
-          )}
+          <Image
+            image={image}
+            x={0}
+            y={0}
+            width={canvasWidth}
+            height={canvasHeight}
+            fit="fill"
+            sampling={{
+              filter: FilterMode.Nearest,
+              mipmap: MipmapMode.None,
+            }}
+          />
         </Canvas>
       </View>
 
@@ -333,10 +367,7 @@ function DoomScreen() {
                 right: Math.max(insets.right + 10, 10),
                 top: Math.max(insets.top + 8, 8),
               }
-            : {
-                right: 14,
-                top: insets.top + 14,
-              }
+            : [styles.schemeTogglePortrait, { top: insets.top + 14 }]
         }
       />
 
@@ -661,8 +692,8 @@ function LookTurnPad({
 }: {
   onPressKey: PressKey;
 }) {
+  const pendingLookDelta = useSharedValue(0);
   const activeTurnKeyRef = useRef<TurnKey | null>(null);
-  const pendingLookDeltaRef = useRef(0);
   const releaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const clearReleaseTimer = useCallback(() => {
@@ -705,30 +736,39 @@ function LookTurnPad({
     }, LOOK_TURN_RELEASE_MS);
   }, [clearReleaseTimer, setTurnKey]);
 
+  const activateTurnKey = useCallback(
+    (nextKey: TurnKey) => {
+      setTurnKey(nextKey);
+      scheduleTurnRelease();
+    },
+    [scheduleTurnRelease, setTurnKey],
+  );
+
   useEffect(() => releaseTurnKey, [releaseTurnKey]);
 
   const lookGesture = usePanGesture({
-    disableReanimated: true,
     minDistance: 0,
     shouldCancelWhenOutside: false,
     onBegin: () => {
-      pendingLookDeltaRef.current = 0;
-      releaseTurnKey();
+      pendingLookDelta.value = 0;
+      scheduleOnRN(releaseTurnKey);
     },
     onUpdate: event => {
-      pendingLookDeltaRef.current += event.changeX;
+      pendingLookDelta.value += event.changeX;
 
-      if (Math.abs(pendingLookDeltaRef.current) < LOOK_TURN_DELTA_THRESHOLD) {
+      if (Math.abs(pendingLookDelta.value) < LOOK_TURN_DELTA_THRESHOLD) {
         return;
       }
 
-      setTurnKey(pendingLookDeltaRef.current > 0 ? 'right' : 'left');
-      pendingLookDeltaRef.current = 0;
-      scheduleTurnRelease();
+      scheduleOnRN(
+        activateTurnKey,
+        pendingLookDelta.value > 0 ? 'right' : 'left',
+      );
+      pendingLookDelta.value = 0;
     },
     onFinalize: () => {
-      pendingLookDeltaRef.current = 0;
-      releaseTurnKey();
+      pendingLookDelta.value = 0;
+      scheduleOnRN(releaseTurnKey);
     },
   });
 
@@ -823,6 +863,45 @@ type MovementKey = 'up' | 'down' | 'left' | 'right';
 type StickInputKey = MovementKey | 'strafe-left' | 'strafe-right';
 type StickHorizontalMode = 'turn' | 'strafe';
 
+function getStickStateFromPoint(
+  x: number,
+  y: number,
+  horizontalMode: StickHorizontalMode,
+) {
+  'worklet';
+
+  const rawX = x - STICK_CENTER;
+  const rawY = y - STICK_CENTER;
+  const distance = Math.hypot(rawX, rawY);
+  const scale =
+    distance > STICK_MAX_OFFSET ? STICK_MAX_OFFSET / distance : 1;
+  const nextX = rawX * scale;
+  const nextY = rawY * scale;
+  let verticalKey: StickInputKey | '' = '';
+  let horizontalKey: StickInputKey | '' = '';
+
+  if (nextY < -STICK_DEAD_ZONE) {
+    verticalKey = 'up';
+  } else if (nextY > STICK_DEAD_ZONE) {
+    verticalKey = 'down';
+  }
+
+  if (nextX < -STICK_DEAD_ZONE) {
+    horizontalKey = horizontalMode === 'strafe' ? 'strafe-left' : 'left';
+  } else if (nextX > STICK_DEAD_ZONE) {
+    horizontalKey = horizontalMode === 'strafe' ? 'strafe-right' : 'right';
+  }
+
+  const keySignature =
+    verticalKey === ''
+      ? horizontalKey
+      : horizontalKey === ''
+        ? verticalKey
+        : `${verticalKey}${STICK_KEY_SEPARATOR}${horizontalKey}`;
+
+  return { keySignature, x: nextX, y: nextY };
+}
+
 type VirtualStickProps = {
   onPressKey: PressKey;
   overlay?: boolean;
@@ -834,11 +913,10 @@ function VirtualStick({
   overlay = false,
   horizontalMode = 'turn',
 }: VirtualStickProps) {
-  const [stickOffset, setStickOffset] = useState({
-    active: false,
-    x: 0,
-    y: 0,
-  });
+  const stickActive = useSharedValue(false);
+  const stickKeySignature = useSharedValue('');
+  const stickX = useSharedValue(0);
+  const stickY = useSharedValue(0);
   const activeKeysRef = useRef<Set<StickInputKey>>(new Set());
 
   const setMovementKeys = useCallback(
@@ -863,100 +941,115 @@ function VirtualStick({
     [onPressKey],
   );
 
-  const updateStickFromPoint = useCallback(
-    (x: number, y: number) => {
-      const rawX = x - STICK_CENTER;
-      const rawY = y - STICK_CENTER;
-      const distance = Math.hypot(rawX, rawY);
-      const scale =
-        distance > STICK_MAX_OFFSET ? STICK_MAX_OFFSET / distance : 1;
-      const nextX = rawX * scale;
-      const nextY = rawY * scale;
-      const nextKeys: StickInputKey[] = [];
-      let horizontalKey: MovementKey | null = null;
-
-      if (nextY < -STICK_DEAD_ZONE) {
-        nextKeys.push('up');
-      } else if (nextY > STICK_DEAD_ZONE) {
-        nextKeys.push('down');
-      }
-
-      if (nextX < -STICK_DEAD_ZONE) {
-        horizontalKey = 'left';
-      } else if (nextX > STICK_DEAD_ZONE) {
-        horizontalKey = 'right';
-      }
-
-      if (horizontalKey != null) {
-        nextKeys.push(
-          horizontalMode === 'strafe'
-            ? horizontalKey === 'left'
-              ? 'strafe-left'
-              : 'strafe-right'
-            : horizontalKey,
-        );
-      }
-
-      setStickOffset({
-        active: nextKeys.length > 0,
-        x: nextX,
-        y: nextY,
-      });
-      setMovementKeys(nextKeys);
+  const setMovementKeySignature = useCallback(
+    (nextKeySignature: string) => {
+      setMovementKeys(
+        nextKeySignature === ''
+          ? []
+          : (nextKeySignature.split(STICK_KEY_SEPARATOR) as StickInputKey[]),
+      );
     },
-    [horizontalMode, setMovementKeys],
+    [setMovementKeys],
   );
 
   const releaseStick = useCallback(() => {
-    setStickOffset({ active: false, x: 0, y: 0 });
+    stickActive.value = false;
+    stickKeySignature.value = '';
+    stickX.value = 0;
+    stickY.value = 0;
     setMovementKeys([]);
-  }, [setMovementKeys]);
+  }, [setMovementKeys, stickActive, stickKeySignature, stickX, stickY]);
 
   useEffect(() => releaseStick, [releaseStick]);
 
+  const stickAnimatedStyle = useAnimatedStyle(
+    () => ({
+      borderColor: stickActive.value
+        ? '#d34a38'
+        : overlay
+          ? 'rgba(245, 218, 167, 0.42)'
+          : '#7e7061',
+    }),
+    [overlay],
+  );
+
+  const stickKnobAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: stickX.value },
+      { translateY: stickY.value },
+    ],
+  }));
+
   const stickGesture = usePanGesture({
-    disableReanimated: true,
     minDistance: 0,
     shouldCancelWhenOutside: false,
     onBegin: event => {
-      updateStickFromPoint(event.x, event.y);
+      const nextStickState = getStickStateFromPoint(
+        event.x,
+        event.y,
+        horizontalMode,
+      );
+
+      stickX.value = nextStickState.x;
+      stickY.value = nextStickState.y;
+      stickActive.value = nextStickState.keySignature !== '';
+
+      if (stickKeySignature.value !== nextStickState.keySignature) {
+        stickKeySignature.value = nextStickState.keySignature;
+        scheduleOnRN(setMovementKeySignature, nextStickState.keySignature);
+      }
     },
     onUpdate: event => {
-      updateStickFromPoint(event.x, event.y);
+      const nextStickState = getStickStateFromPoint(
+        event.x,
+        event.y,
+        horizontalMode,
+      );
+
+      stickX.value = nextStickState.x;
+      stickY.value = nextStickState.y;
+      stickActive.value = nextStickState.keySignature !== '';
+
+      if (stickKeySignature.value !== nextStickState.keySignature) {
+        stickKeySignature.value = nextStickState.keySignature;
+        scheduleOnRN(setMovementKeySignature, nextStickState.keySignature);
+      }
     },
     onFinalize: () => {
-      releaseStick();
+      stickX.value = 0;
+      stickY.value = 0;
+      stickActive.value = false;
+
+      if (stickKeySignature.value !== '') {
+        stickKeySignature.value = '';
+        scheduleOnRN(setMovementKeySignature, '');
+      }
     },
   });
 
   return (
     <GestureDetector gesture={stickGesture}>
-      <View
+      <Animated.View
         accessibilityLabel="Movement stick"
         accessibilityRole="adjustable"
         collapsable={false}
         style={[
           styles.stick,
           overlay && styles.stickOverlay,
-          stickOffset.active && styles.stickActive,
+          stickAnimatedStyle,
         ]}>
         <View style={styles.stickNotchVertical} />
         <View style={styles.stickNotchHorizontal} />
         <View style={styles.stickInnerRing} />
-        <View
+        <Animated.View
           style={[
             styles.stickKnob,
             overlay && styles.stickKnobOverlay,
-            {
-              transform: [
-                { translateX: stickOffset.x },
-                { translateY: stickOffset.y },
-              ],
-            },
+            stickKnobAnimatedStyle,
           ]}>
           <View style={styles.stickKnobCore} />
-        </View>
-      </View>
+        </Animated.View>
+      </Animated.View>
     </GestureDetector>
   );
 }
@@ -1021,6 +1114,9 @@ const styles = StyleSheet.create({
     borderColor: '#675d51',
     backgroundColor: '#101312',
     zIndex: 4,
+  },
+  schemeTogglePortrait: {
+    right: 14,
   },
   schemeToggleOverlay: {
     borderColor: 'rgba(240, 214, 170, 0.42)',

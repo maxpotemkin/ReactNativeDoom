@@ -1,6 +1,6 @@
 import { NitroModules, type HybridObject } from 'react-native-nitro-modules';
 
-export interface DoomEngine extends HybridObject<{ ios: 'c++' }> {
+export interface DoomEngine extends HybridObject<{ ios: 'c++'; android: 'c++' }> {
   readonly defaultIWadPath: string;
   readonly loadedIWadPath: string;
   readonly lastStatus: string;

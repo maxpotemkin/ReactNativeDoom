@@ -1,7 +1,7 @@
 {
   "name": "react-native-doom",
   "version": "0.0.1",
-  "description": "React Native Doom rendering prototype with a native iOS engine bridge.",
+  "description": "React Native Doom rendering prototype with a native Nitro engine bridge.",
   "license": "MIT",
   "private": false,
   "files": [

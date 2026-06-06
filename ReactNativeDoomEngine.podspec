@@ -22,6 +22,7 @@ Pod::Spec.new do |s|
   ]
 
   s.exclude_files = [
+    "cpp/doom_engine/DoomEnginePlatformAndroid.cpp",
     "third_party/doomgeneric/doomgeneric/doomgeneric_allegro.c",
     "third_party/doomgeneric/doomgeneric/doomgeneric_emscripten.c",
     "third_party/doomgeneric/doomgeneric/doomgeneric_linuxvt.c",
@@ -32,8 +33,12 @@ Pod::Spec.new do |s|
     "third_party/doomgeneric/doomgeneric/doomgeneric_xlib.c",
     "third_party/doomgeneric/doomgeneric/i_allegromusic.c",
     "third_party/doomgeneric/doomgeneric/i_allegrosound.c",
+    "third_party/doomgeneric/doomgeneric/i_cdmus.c",
+    "third_party/doomgeneric/doomgeneric/i_joystick.c",
     "third_party/doomgeneric/doomgeneric/i_sdlmusic.c",
     "third_party/doomgeneric/doomgeneric/i_sdlsound.c",
+    "third_party/doomgeneric/doomgeneric/i_sound.c",
+    "third_party/doomgeneric/doomgeneric/i_system.c",
     "third_party/doomgeneric/doomgeneric/mus2mid.c",
   ]
 
