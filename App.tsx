@@ -40,8 +40,8 @@ const STICK_KNOB_SIZE = 58;
 const STICK_CENTER = STICK_SIZE / 2;
 const STICK_MAX_OFFSET = 38;
 const STICK_DEAD_ZONE = 17;
-const LOOK_TURN_DEAD_ZONE = 4;
-const LOOK_TURN_RELEASE_MS = 140;
+const LOOK_TURN_DELTA_THRESHOLD = 0.5;
+const LOOK_TURN_RELEASE_MS = 48;
 const RELEASE_KEYS = [
   'up',
   'down',
@@ -662,8 +662,8 @@ function LookTurnPad({
   onPressKey: PressKey;
 }) {
   const activeTurnKeyRef = useRef<TurnKey | null>(null);
+  const pendingLookDeltaRef = useRef(0);
   const releaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const startXRef = useRef(0);
 
   const clearReleaseTimer = useCallback(() => {
     if (releaseTimerRef.current != null) {
@@ -711,22 +711,23 @@ function LookTurnPad({
     disableReanimated: true,
     minDistance: 0,
     shouldCancelWhenOutside: false,
-    onBegin: event => {
-      startXRef.current = event.x;
+    onBegin: () => {
+      pendingLookDeltaRef.current = 0;
       releaseTurnKey();
     },
     onUpdate: event => {
-      const dragX = event.x - startXRef.current;
+      pendingLookDeltaRef.current += event.changeX;
 
-      if (Math.abs(dragX) < LOOK_TURN_DEAD_ZONE) {
-        setTurnKey(null);
+      if (Math.abs(pendingLookDeltaRef.current) < LOOK_TURN_DELTA_THRESHOLD) {
         return;
       }
 
-      setTurnKey(dragX > 0 ? 'right' : 'left');
+      setTurnKey(pendingLookDeltaRef.current > 0 ? 'right' : 'left');
+      pendingLookDeltaRef.current = 0;
       scheduleTurnRelease();
     },
     onFinalize: () => {
+      pendingLookDeltaRef.current = 0;
       releaseTurnKey();
     },
   });
