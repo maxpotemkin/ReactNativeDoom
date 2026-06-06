@@ -7,9 +7,8 @@ This is a React Native Doom port. The main UI lives in `App.tsx`, with JS-facing
 ## Build, Test, and Development Commands
 
 - `npm start` starts Metro on the default port.
-- `npm start -- --port 8089` starts Metro on the simulator debug port.
 - `npm run check:doom-files` verifies local engine and IWAD files before iOS setup.
-- `npm run ios -- --simulator DOOMAX --port 8089 --no-packager` builds and launches iOS debug against an existing Metro server.
+- `npm run ios` builds and launches iOS debug on an available simulator.
 - `npm run android` builds and launches Android.
 - `bundle exec pod install` from `ios/` refreshes CocoaPods after native dependency or podspec changes.
 - `npm run lint` runs the React Native ESLint config.

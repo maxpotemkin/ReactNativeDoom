@@ -46,16 +46,16 @@ bundle exec pod install
 cd ..
 ```
 
-Run Metro on the debug port used for this project:
+Run Metro:
 
 ```sh
-npm start -- --port 8089
+npm start
 ```
 
-Build and launch on the `DOOMAX` iOS simulator:
+Build and launch on an available iOS simulator:
 
 ```sh
-npm run ios -- --simulator DOOMAX --port 8089 --no-packager
+npm run ios
 ```
 
 ## Development
