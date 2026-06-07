@@ -15,21 +15,13 @@ public:
   ~DoomEngine() override = default;
 
   std::string getDefaultIWadPath();
-  std::string getLoadedIWadPath();
-  std::string getLastStatus();
   std::string getWindowTitle();
-  double getWidth();
-  double getHeight();
   double getFrameCount();
-  bool getIsStarted();
 
   std::string start(const std::string& iwadPath);
-  bool tick();
-  std::shared_ptr<margelo::nitro::ArrayBuffer> tickAndGetFrame();
   std::shared_ptr<margelo::nitro::ArrayBuffer> tickAndGetFrameAudio();
   void openMenu();
   void queueKey(const std::string& key, bool pressed);
-  std::shared_ptr<margelo::nitro::ArrayBuffer> getFrame();
 
   void onDrawFrame();
   void enqueueAudioEvent(
@@ -57,9 +49,9 @@ private:
     std::vector<float> samples;
   };
 
+  bool tick();
   void pushKey(bool pressed, unsigned char key);
   unsigned char mapKey(const std::string& key) const;
-  std::shared_ptr<margelo::nitro::ArrayBuffer> copyFrameAsRgba();
   void writeFrameAsRgba(uint8_t* output);
 
   static constexpr auto TAG = "DoomEngine";
@@ -70,7 +62,6 @@ private:
 
   bool started_ = false;
   double frameCount_ = 0;
-  std::string loadedIWadPath_;
   std::string lastStatus_ = "idle";
   std::string windowTitle_ = "DOOM";
   std::vector<std::string> argvStorage_;

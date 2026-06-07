@@ -9,6 +9,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <thread>
+#include <unordered_map>
 
 extern "C" {
 #include "doomgeneric.h"
@@ -49,37 +50,14 @@ std::string DoomEngine::getDefaultIWadPath() {
   return findBundledIWadPath();
 }
 
-std::string DoomEngine::getLoadedIWadPath() {
-  std::lock_guard<std::mutex> lock(mutex_);
-  return loadedIWadPath_;
-}
-
-std::string DoomEngine::getLastStatus() {
-  std::lock_guard<std::mutex> lock(mutex_);
-  return lastStatus_;
-}
-
 std::string DoomEngine::getWindowTitle() {
   std::lock_guard<std::mutex> lock(mutex_);
   return windowTitle_;
 }
 
-double DoomEngine::getWidth() {
-  return WIDTH;
-}
-
-double DoomEngine::getHeight() {
-  return HEIGHT;
-}
-
 double DoomEngine::getFrameCount() {
   std::lock_guard<std::mutex> lock(mutex_);
   return frameCount_;
-}
-
-bool DoomEngine::getIsStarted() {
-  std::lock_guard<std::mutex> lock(mutex_);
-  return started_;
 }
 
 std::string DoomEngine::start(const std::string& iwadPath) {
@@ -93,7 +71,6 @@ std::string DoomEngine::start(const std::string& iwadPath) {
       return lastStatus_;
     }
     started_ = true;
-    loadedIWadPath_ = iwadPath;
     lastStatus_ = "loading IWAD: " + iwadPath;
   }
 
@@ -118,24 +95,21 @@ std::string DoomEngine::start(const std::string& iwadPath) {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     lastStatus_ = "loaded IWAD: " + iwadPath;
+    return lastStatus_;
   }
-
-  return getLastStatus();
 }
 
 bool DoomEngine::tick() {
-  if (!getIsStarted()) {
-    return false;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!started_) {
+      return false;
+    }
   }
 
   g_engine = this;
   doomgeneric_Tick();
   return true;
-}
-
-std::shared_ptr<margelo::nitro::ArrayBuffer> DoomEngine::tickAndGetFrame() {
-  tick();
-  return copyFrameAsRgba();
 }
 
 std::shared_ptr<margelo::nitro::ArrayBuffer> DoomEngine::tickAndGetFrameAudio() {
@@ -186,10 +160,6 @@ void DoomEngine::openMenu() {
 
 void DoomEngine::queueKey(const std::string& key, bool pressed) {
   pushKey(pressed, mapKey(key));
-}
-
-std::shared_ptr<margelo::nitro::ArrayBuffer> DoomEngine::getFrame() {
-  return copyFrameAsRgba();
 }
 
 void DoomEngine::onDrawFrame() {
@@ -246,20 +216,12 @@ void DoomEngine::loadHybridMethods() {
   HybridObject::loadHybridMethods();
   registerHybrids(this, [](margelo::nitro::Prototype& prototype) {
     prototype.registerHybridGetter("defaultIWadPath", &DoomEngine::getDefaultIWadPath);
-    prototype.registerHybridGetter("loadedIWadPath", &DoomEngine::getLoadedIWadPath);
-    prototype.registerHybridGetter("lastStatus", &DoomEngine::getLastStatus);
     prototype.registerHybridGetter("windowTitle", &DoomEngine::getWindowTitle);
-    prototype.registerHybridGetter("width", &DoomEngine::getWidth);
-    prototype.registerHybridGetter("height", &DoomEngine::getHeight);
     prototype.registerHybridGetter("frameCount", &DoomEngine::getFrameCount);
-    prototype.registerHybridGetter("isStarted", &DoomEngine::getIsStarted);
     prototype.registerHybridMethod("start", &DoomEngine::start);
-    prototype.registerHybridMethod("tick", &DoomEngine::tick);
-    prototype.registerHybridMethod("tickAndGetFrame", &DoomEngine::tickAndGetFrame);
     prototype.registerHybridMethod("tickAndGetFrameAudio", &DoomEngine::tickAndGetFrameAudio);
     prototype.registerHybridMethod("openMenu", &DoomEngine::openMenu);
     prototype.registerHybridMethod("queueKey", &DoomEngine::queueKey);
-    prototype.registerHybridMethod("getFrame", &DoomEngine::getFrame);
   });
 }
 
@@ -288,12 +250,6 @@ unsigned char DoomEngine::mapKey(const std::string& key) const {
   if (key == "strafe") return KEY_LALT;
   if (key.size() == 1) return static_cast<unsigned char>(key[0]);
   throw std::invalid_argument("Unknown Doom key: " + key);
-}
-
-std::shared_ptr<margelo::nitro::ArrayBuffer> DoomEngine::copyFrameAsRgba() {
-  auto rgba = margelo::nitro::ArrayBuffer::allocate(FRAME_BYTES);
-  writeFrameAsRgba(rgba->data());
-  return rgba;
 }
 
 void DoomEngine::writeFrameAsRgba(uint8_t* output) {
@@ -371,6 +327,14 @@ snddevice_t g_soundDevices[] = {
 constexpr int g_soundDeviceCount =
   static_cast<int>(sizeof(g_soundDevices) / sizeof(g_soundDevices[0]));
 
+struct DecodedSfx {
+  int sampleRate;
+  std::vector<float> samples;
+};
+
+std::mutex g_decodedSfxMutex;
+std::unordered_map<int, DecodedSfx> g_decodedSfxCache;
+
 sfxinfo_t* linkedSfx(sfxinfo_t* sfxinfo) {
   if (sfxinfo == nullptr) {
     return nullptr;
@@ -438,6 +402,16 @@ bool decodeDoomSfx(sfxinfo_t* sfxinfo, int& sampleRate, std::vector<float>& samp
     return false;
   }
 
+  {
+    std::lock_guard<std::mutex> lock(g_decodedSfxMutex);
+    const auto cached = g_decodedSfxCache.find(lumpNum);
+    if (cached != g_decodedSfxCache.end()) {
+      sampleRate = cached->second.sampleRate;
+      samples = cached->second.samples;
+      return true;
+    }
+  }
+
   const int lumpLength = W_LumpLength(static_cast<unsigned int>(lumpNum));
   if (lumpLength < 32) {
     return false;
@@ -483,6 +457,12 @@ bool decodeDoomSfx(sfxinfo_t* sfxinfo, int& sampleRate, std::vector<float>& samp
   }
 
   W_ReleaseLumpNum(lumpNum);
+
+  {
+    std::lock_guard<std::mutex> lock(g_decodedSfxMutex);
+    g_decodedSfxCache.emplace(lumpNum, DecodedSfx{sampleRate, samples});
+  }
+
   return true;
 }
 

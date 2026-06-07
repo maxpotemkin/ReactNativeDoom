@@ -1,8 +1,7 @@
 import { AudioContext, type AudioBuffer } from 'react-native-audio-api';
 
-const FRAME_WIDTH = 320;
-const FRAME_HEIGHT = 200;
-const FRAME_BYTES = FRAME_WIDTH * FRAME_HEIGHT * 4;
+import { FRAME_BYTES } from './frameConstants';
+
 const PACKET_MAGIC = 0x58414d44;
 const PACKET_HEADER_BYTES = 8;
 const EVENT_HEADER_BYTES = 24;
@@ -35,6 +34,36 @@ class DoomAudioPlayer {
 
   get droppedCount() {
     return this.totalDropped;
+  }
+
+  suspend() {
+    const context = this.audioContext;
+    if (context == null || context.state !== 'running') {
+      return;
+    }
+
+    context.suspend().catch(error => {
+      const message =
+        error instanceof Error ? error.message : 'failed to suspend audio';
+      console.warn(`[DoomAudio] ${message}`);
+    });
+  }
+
+  close() {
+    const context = this.audioContext;
+    this.audioContext = null;
+    this.resumeInFlight = false;
+    this.bufferCache.clear();
+
+    if (context == null || context.state === 'closed') {
+      return;
+    }
+
+    context.close().catch(error => {
+      const message =
+        error instanceof Error ? error.message : 'failed to close audio';
+      console.warn(`[DoomAudio] ${message}`);
+    });
   }
 
   extractFrameAndPlayAudio(packet: ArrayBuffer): Uint8Array {
@@ -123,6 +152,11 @@ class DoomAudioPlayer {
       source.connect(gain);
       gain.connect(panner);
       panner.connect(context.destination);
+      source.onEnded = () => {
+        source.disconnect();
+        gain.disconnect();
+        panner.disconnect();
+      };
       source.start(now);
 
       this.totalPlayed += 1;

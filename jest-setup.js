@@ -50,19 +50,11 @@ jest.mock('./src/doom/DoomEngine', () => {
   return {
     doomEngine: {
       defaultIWadPath: 'mock/DOOM1.WAD',
-      height: 400,
-      isStarted: false,
-      lastStatus: 'idle',
-      loadedIWadPath: '',
-      width: 640,
       windowTitle: 'DOOM Shareware',
       frameCount: 1,
-      getFrame: jest.fn(() => frame),
       openMenu: jest.fn(),
       queueKey: jest.fn(),
       start: jest.fn(iwadPath => `loaded IWAD: ${iwadPath}`),
-      tick: jest.fn(() => true),
-      tickAndGetFrame: jest.fn(() => frame),
       tickAndGetFrameAudio: jest.fn(() => frame),
     },
   };

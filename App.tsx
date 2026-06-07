@@ -1,9 +1,20 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, {
+  forwardRef,
+  memo,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
+  AppState,
   StatusBar,
   type StyleProp,
   StyleSheet,
   Text,
+  type TextStyle,
   useWindowDimensions,
   type ViewStyle,
   View,
@@ -33,10 +44,12 @@ import {
 
 import { doomEngine } from './src/doom/DoomEngine';
 import { doomAudio } from './src/doom/DoomAudio';
+import {
+  FRAME_BYTES_PER_ROW,
+  FRAME_HEIGHT,
+  FRAME_WIDTH,
+} from './src/doom/frameConstants';
 
-const FRAME_WIDTH = 320;
-const FRAME_HEIGHT = 200;
-const FRAME_BYTES_PER_ROW = FRAME_WIDTH * 4;
 const TARGET_RENDER_FPS = 60;
 const FRAME_INTERVAL_MS = 1000 / TARGET_RENDER_FPS;
 const MIN_FRAME_DELTA_MS = FRAME_INTERVAL_MS * 0.9;
@@ -70,6 +83,9 @@ const nowMs = () => Date.now();
 
 type ControlScheme = 'current' | 'bethesda';
 type PressKey = (key: string, pressed: boolean, sourceId?: string) => void;
+type StatusTextHandle = {
+  setStatus: (status: string) => void;
+};
 
 function App() {
   return (
@@ -86,9 +102,9 @@ function DoomScreen() {
   const { width: viewportWidth, height: viewportHeight } = useWindowDimensions();
   const isLandscape = viewportWidth > viewportHeight;
   const image = useSharedValue<SkImage | null>(null);
-  const [status, setStatus] = useState('booting');
   const imageRef = useRef<SkImage | null>(null);
   const retainedImagesRef = useRef<SkImage[]>([]);
+  const statusTextRef = useRef<StatusTextHandle>(null);
   const menuOpenedRef = useRef(false);
   const tickCountRef = useRef(0);
   const weaponSlotRef = useRef(1);
@@ -106,11 +122,68 @@ function DoomScreen() {
   const canvasWidth = isLandscape ? viewportWidth : portraitCanvasWidth;
   const canvasHeight = isLandscape ? viewportHeight : portraitCanvasHeight;
   const controlsTop = insets.top + portraitCanvasHeight + 18;
-  const canvasFrameLayout = {
-    height: canvasHeight,
-    marginTop: isLandscape ? 0 : insets.top + 10,
-    width: canvasWidth,
-  };
+  const canvasFrameLayout = useMemo(
+    () => ({
+      height: canvasHeight,
+      marginTop: isLandscape ? 0 : insets.top + 10,
+      width: canvasWidth,
+    }),
+    [canvasHeight, canvasWidth, insets.top, isLandscape],
+  );
+  const statusTextStyle = useMemo<StyleProp<TextStyle>>(
+    () => [
+      styles.status,
+      isLandscape
+        ? {
+            left: Math.max(insets.left + 10, 10),
+            top: Math.max(insets.top + 8, 8),
+          }
+        : { top: controlsTop - 8 },
+      isLandscape && styles.statusLandscape,
+    ],
+    [controlsTop, insets.left, insets.top, isLandscape],
+  );
+  const schemeToggleStyle = useMemo<StyleProp<ViewStyle>>(
+    () =>
+      isLandscape
+        ? {
+            right: Math.max(insets.right + 10, 10),
+            top: Math.max(insets.top + 8, 8),
+          }
+        : [styles.schemeTogglePortrait, { top: insets.top + 14 }],
+    [insets.right, insets.top, isLandscape],
+  );
+  const controlsStyle = useMemo<StyleProp<ViewStyle>>(
+    () => [
+      styles.controls,
+      isLandscape
+        ? {
+            bottom: Math.max(insets.bottom + 12, 12),
+            left: Math.max(insets.left + 14, 14),
+            right: Math.max(insets.right + 14, 14),
+          }
+        : {
+            left: controlsHorizontalInset,
+            right: controlsHorizontalInset,
+            top: controlsTop + 26,
+          },
+      isLandscape && styles.controlsLandscape,
+    ],
+    [
+      controlsHorizontalInset,
+      controlsTop,
+      insets.bottom,
+      insets.left,
+      insets.right,
+      isLandscape,
+    ],
+  );
+
+  const updateDebugStatus = useCallback((nextStatus: string) => {
+    if (__DEV__) {
+      statusTextRef.current?.setStatus(nextStatus);
+    }
+  }, []);
 
   const updateImage = useCallback((bytes: Uint8Array) => {
     const data = Skia.Data.fromBytes(bytes);
@@ -161,12 +234,12 @@ function DoomScreen() {
         console.log(`[Doom] DOOM1.WAD path: ${iwadPath}`);
         const startStatus = doomEngine.start(iwadPath);
         console.log(`[Doom] ${startStatus}`);
-        setStatus(startStatus);
+        updateDebugStatus(startStatus);
       } catch (error) {
         const message =
           error instanceof Error ? error.message : 'failed to start Doom';
         console.error(`[Doom] ${message}`);
-        setStatus(message);
+        updateDebugStatus(message);
         return;
       }
 
@@ -204,7 +277,10 @@ function DoomScreen() {
           renderCount += 1;
 
           const statusTimestamp = nowMs();
-          if (statusTimestamp - lastStatusTime >= STATUS_INTERVAL_MS) {
+          if (
+            __DEV__ &&
+            statusTimestamp - lastStatusTime >= STATUS_INTERVAL_MS
+          ) {
             const frameCount = doomEngine.frameCount;
             const elapsedSeconds = (statusTimestamp - lastStatusTime) / 1000;
             const measuredFps =
@@ -213,7 +289,7 @@ function DoomScreen() {
             lastStatusTime = statusTimestamp;
             lastStatusRenderCount = renderCount;
 
-            setStatus(
+            updateDebugStatus(
               `${doomEngine.windowTitle} frame ${Math.round(
                 frameCount,
               )} render ${renderCount} ${Math.round(
@@ -225,7 +301,7 @@ function DoomScreen() {
           const message =
             error instanceof Error ? error.message : 'Doom frame failed';
           console.error(`[Doom] ${message}`);
-          setStatus(message);
+          updateDebugStatus(message);
         }
 
         scheduleRender();
@@ -249,8 +325,9 @@ function DoomScreen() {
         retainedImage.dispose();
       });
       retainedImagesRef.current = [];
+      doomAudio.close();
     };
-  }, [image, updateImage]);
+  }, [image, updateDebugStatus, updateImage]);
 
   const pressKey = useCallback<PressKey>((key, pressed, sourceId = key) => {
     const activePressSources = activePressSourcesRef.current;
@@ -308,6 +385,18 @@ function DoomScreen() {
   }, []);
 
   useEffect(() => {
+    const subscription = AppState.addEventListener('change', nextState => {
+      if (nextState !== 'active') {
+        doomAudio.suspend();
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, []);
+
+  useEffect(() => {
     if (schemeRef.current === controlScheme) {
       return;
     }
@@ -342,54 +431,20 @@ function DoomScreen() {
         </Canvas>
       </View>
 
-      <Text
-        accessibilityRole="text"
-        style={[
-          styles.status,
-          isLandscape
-            ? {
-                left: Math.max(insets.left + 10, 10),
-                top: Math.max(insets.top + 8, 8),
-              }
-            : { top: controlsTop - 8 },
-          isLandscape && styles.statusLandscape,
-        ]}>
-        {status}
-      </Text>
+      {__DEV__ && <StatusText ref={statusTextRef} style={statusTextStyle} />}
 
       <ControlSchemeToggle
         scheme={controlScheme}
         onChange={setControlScheme}
         overlay={isLandscape}
-        style={
-          isLandscape
-            ? {
-                right: Math.max(insets.right + 10, 10),
-                top: Math.max(insets.top + 8, 8),
-              }
-            : [styles.schemeTogglePortrait, { top: insets.top + 14 }]
-        }
+        style={schemeToggleStyle}
       />
 
       {isBethesdaScheme && <LookTurnPad onPressKey={pressKey} />}
 
       <View
         pointerEvents="box-none"
-        style={[
-          styles.controls,
-          isLandscape
-            ? {
-                bottom: Math.max(insets.bottom + 12, 12),
-                left: Math.max(insets.left + 14, 14),
-                right: Math.max(insets.right + 14, 14),
-              }
-            : {
-                left: controlsHorizontalInset,
-                right: controlsHorizontalInset,
-                top: controlsTop + 26,
-              },
-          isLandscape && styles.controlsLandscape,
-        ]}>
+        style={controlsStyle}>
         <LeftControls
           scheme={controlScheme}
           onPressKey={pressKey}
@@ -417,6 +472,27 @@ function DoomScreen() {
   );
 }
 
+type StatusTextProps = {
+  style: StyleProp<TextStyle>;
+};
+
+const StatusText = memo(
+  forwardRef<StatusTextHandle, StatusTextProps>(function StatusTextComponent(
+    { style },
+    ref,
+  ) {
+    const [status, setStatus] = useState('booting');
+
+    useImperativeHandle(ref, () => ({ setStatus }), []);
+
+    return (
+      <Text accessibilityRole="text" style={style}>
+        {status}
+      </Text>
+    );
+  }),
+);
+
 type ControlSchemeToggleProps = {
   scheme: ControlScheme;
   onChange: (scheme: ControlScheme) => void;
@@ -424,7 +500,7 @@ type ControlSchemeToggleProps = {
   style: StyleProp<ViewStyle>;
 };
 
-function ControlSchemeToggle({
+const ControlSchemeToggle = memo(function ControlSchemeToggleComponent({
   scheme,
   onChange,
   overlay,
@@ -478,7 +554,7 @@ function ControlSchemeToggle({
       </Pressable>
     </View>
   );
-}
+});
 
 type ControlActionsProps = {
   onPressKey: PressKey;
@@ -488,7 +564,7 @@ type ControlActionsProps = {
   compact?: boolean;
 };
 
-function LeftControls({
+const LeftControls = memo(function LeftControlsComponent({
   scheme,
   onPressKey,
   overlay,
@@ -526,14 +602,21 @@ function LeftControls({
       />
     </View>
   );
-}
+});
 
-function CurrentActions({
+const CurrentActions = memo(function CurrentActionsComponent({
   onPressKey,
   onTapKey,
   onCycleWeapon,
   overlay,
 }: ControlActionsProps) {
+  const selectPreviousWeapon = useCallback(() => {
+    onCycleWeapon(-1);
+  }, [onCycleWeapon]);
+  const selectNextWeapon = useCallback(() => {
+    onCycleWeapon(1);
+  }, [onCycleWeapon]);
+
   return (
     <View style={styles.actions}>
       <ControlButton
@@ -571,14 +654,14 @@ function CurrentActions({
       <ControlButton
         label="W+"
         keyName="weapon-next"
-        onTap={() => onCycleWeapon(1)}
+        onTap={selectNextWeapon}
         overlay={overlay}
         accessibilityLabel="WEAPON NEXT"
       />
       <ControlButton
         label="W-"
         keyName="weapon-prev"
-        onTap={() => onCycleWeapon(-1)}
+        onTap={selectPreviousWeapon}
         overlay={overlay}
         accessibilityLabel="WEAPON PREVIOUS"
       />
@@ -596,15 +679,22 @@ function CurrentActions({
       />
     </View>
   );
-}
+});
 
-function BethesdaActions({
+const BethesdaActions = memo(function BethesdaActionsComponent({
   onPressKey,
   onTapKey,
   onCycleWeapon,
   overlay,
   compact = false,
 }: ControlActionsProps) {
+  const selectPreviousWeapon = useCallback(() => {
+    onCycleWeapon(-1);
+  }, [onCycleWeapon]);
+  const selectNextWeapon = useCallback(() => {
+    onCycleWeapon(1);
+  }, [onCycleWeapon]);
+
   return (
     <View style={[styles.bethesdaActions, compact && styles.bethesdaActionsCompact]}>
       <View
@@ -644,7 +734,7 @@ function BethesdaActions({
         <ControlButton
           label="W-"
           keyName="weapon-prev"
-          onTap={() => onCycleWeapon(-1)}
+          onTap={selectPreviousWeapon}
           overlay={overlay}
           size={compact ? 'tiny' : 'compact'}
           accessibilityLabel="WEAPON PREVIOUS"
@@ -652,7 +742,7 @@ function BethesdaActions({
         <ControlButton
           label="W+"
           keyName="weapon-next"
-          onTap={() => onCycleWeapon(1)}
+          onTap={selectNextWeapon}
           overlay={overlay}
           size={compact ? 'tiny' : 'compact'}
           accessibilityLabel="WEAPON NEXT"
@@ -683,11 +773,11 @@ function BethesdaActions({
       />
     </View>
   );
-}
+});
 
 type TurnKey = 'left' | 'right';
 
-function LookTurnPad({
+const LookTurnPad = memo(function LookTurnPadComponent({
   onPressKey,
 }: {
   onPressKey: PressKey;
@@ -782,7 +872,7 @@ function LookTurnPad({
       />
     </GestureDetector>
   );
-}
+});
 
 type ControlButtonProps = {
   label: string;
@@ -798,7 +888,7 @@ type ControlButtonProps = {
   accessibilityLabel?: string;
 };
 
-function ControlButton({
+const ControlButton = memo(function ControlButtonComponent({
   label,
   keyName,
   onPressKey,
@@ -857,7 +947,7 @@ function ControlButton({
       </Text>
     </Pressable>
   );
-}
+});
 
 type MovementKey = 'up' | 'down' | 'left' | 'right';
 type StickInputKey = MovementKey | 'strafe-left' | 'strafe-right';
@@ -908,7 +998,7 @@ type VirtualStickProps = {
   horizontalMode?: StickHorizontalMode;
 };
 
-function VirtualStick({
+const VirtualStick = memo(function VirtualStickComponent({
   onPressKey,
   overlay = false,
   horizontalMode = 'turn',
@@ -980,40 +1070,29 @@ function VirtualStick({
     ],
   }));
 
+  const applyStickState = (x: number, y: number) => {
+    'worklet';
+
+    const nextStickState = getStickStateFromPoint(x, y, horizontalMode);
+
+    stickX.value = nextStickState.x;
+    stickY.value = nextStickState.y;
+    stickActive.value = nextStickState.keySignature !== '';
+
+    if (stickKeySignature.value !== nextStickState.keySignature) {
+      stickKeySignature.value = nextStickState.keySignature;
+      scheduleOnRN(setMovementKeySignature, nextStickState.keySignature);
+    }
+  };
+
   const stickGesture = usePanGesture({
     minDistance: 0,
     shouldCancelWhenOutside: false,
     onBegin: event => {
-      const nextStickState = getStickStateFromPoint(
-        event.x,
-        event.y,
-        horizontalMode,
-      );
-
-      stickX.value = nextStickState.x;
-      stickY.value = nextStickState.y;
-      stickActive.value = nextStickState.keySignature !== '';
-
-      if (stickKeySignature.value !== nextStickState.keySignature) {
-        stickKeySignature.value = nextStickState.keySignature;
-        scheduleOnRN(setMovementKeySignature, nextStickState.keySignature);
-      }
+      applyStickState(event.x, event.y);
     },
     onUpdate: event => {
-      const nextStickState = getStickStateFromPoint(
-        event.x,
-        event.y,
-        horizontalMode,
-      );
-
-      stickX.value = nextStickState.x;
-      stickY.value = nextStickState.y;
-      stickActive.value = nextStickState.keySignature !== '';
-
-      if (stickKeySignature.value !== nextStickState.keySignature) {
-        stickKeySignature.value = nextStickState.keySignature;
-        scheduleOnRN(setMovementKeySignature, nextStickState.keySignature);
-      }
+      applyStickState(event.x, event.y);
     },
     onFinalize: () => {
       stickX.value = 0;
@@ -1052,7 +1131,7 @@ function VirtualStick({
       </Animated.View>
     </GestureDetector>
   );
-}
+});
 
 const styles = StyleSheet.create({
   container: {
@@ -1176,9 +1255,6 @@ const styles = StyleSheet.create({
   stickOverlay: {
     borderColor: 'rgba(245, 218, 167, 0.42)',
     backgroundColor: 'rgba(12, 14, 13, 0.54)',
-  },
-  stickActive: {
-    borderColor: '#d34a38',
   },
   stickInnerRing: {
     position: 'absolute',
